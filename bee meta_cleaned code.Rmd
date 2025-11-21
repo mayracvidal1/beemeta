@@ -1,0 +1,217 @@
+---
+title: "Bee meta-analysis"
+author: "Mayra Vidal"
+date: "2024-04-24"
+output: html_document
+---
+
+```{r}
+setwd("~/OneDrive - University of Massachusetts Boston/Manuscripts/bee meta analysis")
+
+rm(list=ls())
+
+#start loading packages
+
+library(metafor)
+library(multcomp)
+library(lattice)
+library(tidyverse)
+
+
+#step 1
+#opening up the data table and creating a data frame
+#this gave me the entire file with all NA in columns and in rows.
+library(readr)
+meta_analysis_data_bygenus <- read.csv("~/OneDrive - University of Massachusetts Boston/Manuscripts/bee meta analysis/meta analysis_data_bygenus2025.csv")
+
+#this command allows me to choose the rows, and then columns that I want, so that I can omit the ones with NA.
+#1:26 to get rid of heriades genus for the genus test as a moderator. 1:27 for ALL of entries for overall statistical analysis.
+meta_analysis_data_bygenusv2<-meta_analysis_data_bygenus[1:27, 1:21]
+
+
+
+#step 2
+#create/calculate my effect sizes
+# SMD difference between means of two groups, and natural log of response ratio.
+#The calculated effect sizes will be named “yi” and that is what we will use as our response variable in the models. It will also calculate the variation associated with each effect size, which will be called “vi”, that is going to be the weight in the models.
+bee_meta_v1<- escalc(n1i = N_treat, n2i = N_control, m1i = mean_treat, m2i = mean_control, sd1i = SD_treat, sd2i = SD_control, data =meta_analysis_data_bygenus, measure = "SMD", append = TRUE)
+
+
+
+#step3
+#turn Study ID into factor so R reads it as categorical
+bee_meta_v1$Study_ID <- as.factor(bee_meta_v1$Study_ID)
+bee_meta_v1$Genus_order <- as.factor(bee_meta_v1$Genus_order)
+```
+
+```{r}
+#step4
+#fail safe number calculation.
+#failsafenumber (fsn)=how many studies (negative studies that say no effect) we should have to contradict the results we found as positive effect
+fsn(yi, vi, data=bee_meta_v1, type="Rosenthal", alpha=.05, digits=4)
+
+
+#step5
+#run actual multi-level model
+#This will just tell us if the effect sizes are heterogeneous or not. And will also give the overall estimate of the effect sizes, and if it is different from zero or not.
+#It gives us Q value = we should report Q value
+#first run the model with genus as a random variable to test for phylogenetic relatedness.
+model_genusrandom<-rma.mv(yi~1, V=vi, random=list(~1|Study_ID/Case_ID, ~1|Genus), data=bee_meta_v1)
+summary(model_genusrandom)
+
+#run same model but take out genus to see if there is any variance or whether we can drop this random effect from the model entirely.
+model1<-rma.mv(yi~1, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1)
+summary(model1)
+#they both are exactly the same, variance is basically zero. see results below.
+
+
+#step 6
+#to test for asymmetry and do 1)eggers test and 2)small study effect
+#1) EGGERS TEST
+model.egger<-rma.mv(yi, vi, mod=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1)
+summary(model.egger)
+
+#2)small study effect
+bee_meta_v1$sei <- sqrt(bee_meta_v1$vi)
+model.egger.ss<-rma.mv(yi, mod=~sei, V=vi, random=~1|Study_ID/Case_ID, data=bee_meta_v1) 
+summary(model.egger.ss) #Small study effect
+
+bubble_plot(model.egger.ss, mod = "sei", group = "Case_ID", 
+              xlab = "sei", ylab = "Effect size") + geom_point(data = bee_meta_v1, aes(x = sei, y = yi, size = 1/sqrt(vi)), alpha = 0.6)
+
+
+# Funnel plot
+funnel(model1, yaxis="vinv")  
+
+
+#This code creates a histogram of the DISTRIBUTION OF EFFECT SIZES
+hist(bee_meta_v1$yi, col="gray", breaks=20, ylim=c(0,8), xlab="Effect size")
+
+
+```
+
+```{r}
+#Step7
+
+#THE NEXT THREE MODELS ARE TO SEE IF MODERATORS EXPLAIN ANY OF THE HETEROGENEITY.
+#1) model tests whether the exp bee type (model bee, dead bee, or alive bee) explained the heterogeneity in our model.
+model.beetype<-rma.mv(yi~ exp_bee_type, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1)
+summary(model.beetype)
+
+#when we just do "exp_bee_type" as fixed effect alone, then the different types are being compared to the live cue bee type. whereas if we want to compare it all to the zero intercept, then we need to add -1 to the first argument. see below for results.
+model.beetype_v2<-rma.mv(yi~ exp_bee_type-1, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1)
+summary(model.beetype_v2)
+
+#2) model tests whether Genus of the foraging bee that was tested/observed significantly explained the heterogeneity in our model.
+model.beegenus<-rma.mv(yi~ Genus, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1)
+summary(model.beegenus)
+
+
+model.beegenus_v2<-rma.mv(yi~ Genus-1, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1)
+summary(model.beegenus_v2)
+
+
+#3)model tests that whether the visual bee cue was a con- or heterospecific could explain heterogeneity in our model.
+model.con.or.hetero<-rma.mv(yi~ exp_specific_type, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1)
+summary(model.con.or.hetero)
+
+model.con.or.hetero_v2<-rma.mv(yi~ exp_specific_type-1, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1)
+summary(model.con.or.hetero_v2)
+
+
+#step 8
+#next 3 models we are testing separately for apis mellifera, bombus impatiens, and bombus terrestris which were the most common species
+
+#1) apis mellifera
+model1.am<-rma.mv(yi~1, V=vi, random=list(~1|Study_ID/Case_ID),  subset=(Species=="mellifera"),data=bee_meta_v1)
+summary(model1.am)
+
+#2) bombus impatiens
+model1.bi<-rma.mv(yi~1, V=vi, random=list(~1|Study_ID/Case_ID),  subset=(Species=="impatiens"),data=bee_meta_v1)
+summary(model1.bi)
+
+
+#3) bombus terrestris
+model1_bt<-rma.mv(yi~1, V=vi, random=list(~1|Study_ID/Case_ID),  subset=(Species=="terrestris"),data=bee_meta_v1)
+summary(model1_bt)
+
+```
+
+```{r}
+#New figure
+resp_bee<-read.csv("~/OneDrive - University of Massachusetts Boston/Manuscripts/bee meta analysis/numbers_bees.csv")
+resp_bee$species2 <- factor(resp_bee$species2, levels = rev(c("Overall (n=35)", "Apis mellifera (n=4)", "Bombus impatiens (n=17)", "Bombus terrestris (n=12)", "Bombus vagans (n=1)", "Multiple Bombus (n=1)", "Heriades fulvohispidus (n=1)")))
+
+resp_bee$group <- dplyr::case_when(
+  grepl("Apis mellifera", resp_bee$species) ~ "Apis",
+  grepl("Overall", resp_bee$species) ~ "Overall",
+  TRUE ~ "Other"
+)
+
+ggplot(resp_bee, aes(species2,estimate,ymin=ci.low, ymax=ci.upper)) + geom_pointrange() + 
+coord_flip()+ xlab(NULL)+ ylab("Effect size")+
+  scale_color_manual(values = c("Overall"="#1f77b4", "Apis"="#1f77b4","Other" = "black"
+  )) +
+scale_y_continuous(limits=c(-2,6))+
+geom_hline(yintercept=0, color="grey60",linetype="dashed")+
+theme(panel.grid.major.x=element_blank(),panel.grid.minor.x=element_blank(),panel.grid.major.y=element_line(color="grey60",linetype="dashed"))  + 
+theme_bw() +
+theme(strip.text.y = element_text(angle = 0)) + scale_x_discrete(labels = c(
+    "Overall (n=35)" = "Overall (n=35)",
+    "Apis mellifera (n=4)" = expression(italic("Apis mellifera")~"(n=4)"),
+    "Bombus impatiens (n=17)" = expression(italic("Bombus impatiens")~"(n=17)"),
+    "Bombus terrestris (n=12)" = expression(italic("Bombus terrestris")~"(n=12)"),
+    "Bombus vagans (n=1)" = expression(italic("Bombus vagans")~"(n=1)"),
+    "Multiple Bombus (n=1)" = expression("Multiple"~ italic("Bombus")~ "(n=1)"),  # not italicized
+    "Heriades fulvohispidus (n=1)" = expression(italic("Heriades fulvohispidus")~"(n=1)")
+  ))
+
+ggplot(resp_bee, aes(x = species2, y = estimate, ymin = ci.low, ymax = ci.upper, color = group)) +
+  geom_pointrange() +
+  coord_flip() +
+  xlab(NULL) +
+  ylab("Effect size") +
+  scale_color_manual(values = c(
+    "Overall" = "#1f77b4",
+    "Apis" = "#1f77b4",
+    "Other" = "black"
+  )) +
+  scale_y_continuous(limits = c(-2, 6)) +
+  geom_hline(yintercept = 0, color = "grey60", linetype = "dashed") +
+  theme_bw() +
+ theme(legend.position = "none") +
+  theme(strip.text.y = element_text(angle = 0)) + 
+  scale_x_discrete(labels = c(
+    "Overall (n=35)" = "Overall (n=35)",
+    "Apis mellifera (n=4)" = expression(italic("Apis mellifera")~"(n=4)"),
+    "Bombus impatiens (n=17)" = expression(italic("Bombus impatiens")~"(n=17)"),
+    "Bombus terrestris (n=12)" = expression(italic("Bombus terrestris")~"(n=12)"),
+    "Bombus vagans (n=1)" = expression(italic("Bombus vagans")~"(n=1)"),
+    "Multiple Bombus (n=1)" = expression("Multiple"~italic("Bombus")~"(n=1)"),
+    "Heriades fulvohispidus (n=1)" = expression(italic("Heriades fulvohispidus")~"(n=1)")
+  ))
+
+```
+
+```{r}
+#Lastly our sensitivity analysis, removing papers that might have contributed with the patterns
+
+#Removing Abbot
+no_abbot_model<-rma.mv(yi~1, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1%>%filter(authors!="Abbot"))
+summary(no_abbot_model)
+
+
+
+#Removing Dunlap
+no_dunlap_model<-rma.mv(yi~1, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1%>%filter(authors!="Dunlap"))
+summary(no_dunlap_model)
+
+
+
+#NO HORNA-LOWELL:
+no_hornalowell2019_model<-rma.mv(yi~1, V=vi, random=list(~1|Study_ID/Case_ID), data=bee_meta_v1%>%filter(Study_ID!="1"))
+summary(no_hornalowell2019_model)
+ 
+funnel(no_hornalowell2019_model, yaxis="vinv")
+```
+
